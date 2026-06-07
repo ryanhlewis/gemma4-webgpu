@@ -4,7 +4,8 @@ sdk: gradio
 app_file: app.py
 python_version: "3.11"
 models:
-  - google/gemma-4-E2B-it-qat-q4_0-gguf
+  - ryanhlewis/gemma-4-E2B-it-qat-q4_0-gguf-webgpu
+  - gguf-org/gemma-4-e2b-it-gguf
 tags:
   - webgpu
   - gguf
@@ -15,7 +16,7 @@ tags:
 
 # Gemma 4 WebGPU
 
-Browser chat app for `google/gemma-4-E2B-it-qat-q4_0-gguf`.
+Browser chat app for `ryanhlewis/gemma-4-E2B-it-qat-q4_0-gguf-webgpu`.
 
 The Space serves only HTML, CSS, JavaScript, and Wllama WASM assets from the checked-in `dist/` build. The GGUF files are downloaded by the browser and inference runs locally through Wllama / llama.cpp WebGPU. The Python entrypoint is only a static file server with cross-origin isolation headers.
 
@@ -26,9 +27,9 @@ The official Google repository contains:
 | File | Size | Use |
 | --- | ---: | --- |
 | `gemma-4-E2B_q4_0-it.gguf` | 3.35 GB | language model |
-| `gemma-4-E2B-it-mmproj.gguf` | 987 MB | vision projector |
+| `mmproj-gemma-4-e2b-it-q4_0.gguf` | 336 MB | q4 vision projector |
 
-Wllama supports split GGUF loading, so the app defaults to a public mirror containing split shards of the 3.35 GB model file plus the mmproj file. This keeps each browser-fetched LLM shard under the per-file browser/WASM limit while preserving the same model weights.
+Wllama supports split GGUF loading, so the app defaults to a public mirror containing split shards of the 3.35 GB model file plus a q4 vision projector. This keeps each browser-fetched LLM shard under the per-file browser/WASM limit while preserving the same language model weights.
 
 ## Local Development
 
@@ -51,7 +52,7 @@ The app accepts:
 
 ```text
 ?modelUrl=https://huggingface.co/<repo>/resolve/main/model-00001-of-00005.gguf
-?mmprojUrl=https://huggingface.co/<repo>/resolve/main/gemma-4-E2B-it-mmproj.gguf
+?mmprojUrl=https://huggingface.co/<repo>/resolve/main/mmproj-gemma-4-e2b-it-q4_0.gguf
 ?ctx=4096&threads=4&maxTokens=384
 ```
 

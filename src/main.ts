@@ -12,12 +12,23 @@ import "./style.css";
 const DEFAULT_LLM_URL =
   "https://huggingface.co/ryanhlewis/gemma-4-E2B-it-qat-q4_0-gguf-webgpu/resolve/main/gemma-4-E2B_q4_0-it-00001-of-00005.gguf";
 const DEFAULT_MMPROJ_URL =
-  "https://huggingface.co/ryanhlewis/gemma-4-E2B-it-qat-q4_0-gguf-webgpu/resolve/main/gemma-4-E2B-it-mmproj.gguf";
+  "https://huggingface.co/gguf-org/gemma-4-e2b-it-gguf/resolve/main/mmproj-gemma-4-e2b-it-q4_0.gguf";
 const GOOGLE_SINGLE_GGUF =
   "https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf/resolve/main/gemma-4-E2B_q4_0-it.gguf";
-const TOTAL_DOWNLOAD_BYTES = 4_340_000_000;
-const MAX_IMAGE_DIMENSION = 1024;
-const IMAGE_JPEG_QUALITY = 0.9;
+const TOTAL_DOWNLOAD_BYTES = 3_686_000_000;
+const MAX_IMAGE_DIMENSION = 448;
+const IMAGE_JPEG_QUALITY = 0.88;
+const IMAGE_MIN_TOKENS = 70;
+const IMAGE_MAX_TOKENS = 70;
+const MODEL_ASSET_SIZES = new Map<string, number>([
+  ["gemma-4-E2B_q4_0-it-00001-of-00005.gguf", 43_313_792],
+  ["gemma-4-E2B_q4_0-it-00002-of-00005.gguf", 1_926_758_592],
+  ["gemma-4-E2B_q4_0-it-00003-of-00005.gguf", 511_960_928],
+  ["gemma-4-E2B_q4_0-it-00004-of-00005.gguf", 505_303_456],
+  ["gemma-4-E2B_q4_0-it-00005-of-00005.gguf", 362_177_920],
+  ["mmproj-gemma-4-e2b-it-q4_0.gguf", 335_790_368],
+]);
+let headSizeShimInstalled = false;
 
 type Role = "user" | "assistant";
 
@@ -33,6 +44,7 @@ type ChatEntry = {
   thinkingOpen?: boolean;
   thinkingTouched?: boolean;
   isStreaming?: boolean;
+  pendingLabel?: string;
 };
 
 type ImageAttachment = {
@@ -170,7 +182,7 @@ function loadDetail(progress: number): string {
   if (loading && loadPhase === "initializing") {
     return `Download complete | Initializing ${formatSeconds(elapsedPhaseSeconds())}`;
   }
-  return "4.34 GB";
+  return "3.69 GB";
 }
 
 function webgpuStatus(): string {
@@ -223,6 +235,40 @@ function appendLog(message: string): void {
   el.scrollTop = el.scrollHeight;
 }
 
+function installModelHeadSizeShim(): void {
+  if (headSizeShimInstalled || typeof globalThis.fetch !== "function") return;
+  const originalFetch = globalThis.fetch.bind(globalThis);
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const request = input instanceof Request ? input : null;
+    const method = (init?.method || request?.method || "GET").toUpperCase();
+    if (method === "HEAD") {
+      const rawUrl = request?.url || String(input);
+      let pathname = "";
+      try {
+        pathname = new URL(rawUrl, window.location.href).pathname;
+      } catch {
+        pathname = rawUrl;
+      }
+      const filename = decodeURIComponent(pathname.split("/").pop() || "");
+      const size = MODEL_ASSET_SIZES.get(filename);
+      if (size) {
+        return Promise.resolve(
+          new Response(null, {
+            status: 200,
+            statusText: "OK",
+            headers: {
+              "accept-ranges": "bytes",
+              "content-length": String(size),
+            },
+          })
+        );
+      }
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  headSizeShimInstalled = true;
+}
+
 function renderMessage(item: ChatEntry, index: number): string {
   if (item.role === "user") {
     const text = item.content.trim() ? `<div class="answer-text">${escapeHtml(item.content)}</div>` : "";
@@ -231,7 +277,7 @@ function renderMessage(item: ChatEntry, index: number): string {
   }
 
   const thinking = cleanDisplayText(item.thinking || "");
-  const shouldShowThinking = state.thinking === "enabled" && thinking.length > 0;
+  const shouldShowThinking = state.thinking === "enabled" && (thinking.length > 0 || Boolean(item.isStreaming));
   const arrow = item.thinkingOpen ? iconSvg("chevronUp") : iconSvg("chevronDown");
   const thinkingBlock = shouldShowThinking
     ? `<div class="thinking-block">
@@ -241,20 +287,24 @@ function renderMessage(item: ChatEntry, index: number): string {
         </button>
         ${
           item.thinkingOpen
-            ? `<div class="thinking-content">${escapeHtml(thinking)}</div>`
+            ? `<div class="thinking-content">${thinking ? escapeHtml(thinking) : `<span class="subtle">${escapeHtml(item.pendingLabel || "Waiting for thinking tokens...")}</span>`}</div>`
             : ""
         }
       </div>`
     : "";
   const answerText = cleanDisplayText(item.content);
   const answer = answerText ? `<div class="answer-text">${escapeHtml(answerText)}</div>` : "";
-  const pendingText = state.thinking === "enabled" ? "Thinking..." : "Waiting for response...";
+  const pendingText = item.pendingLabel || (state.thinking === "enabled" ? "Thinking..." : "Waiting for response...");
   const waiting =
     item.isStreaming && !answer && !thinkingBlock
       ? `<div class="answer-text"><span class="subtle">${pendingText}</span></div>`
       : "";
+  const statusLine =
+    item.isStreaming && item.pendingLabel && thinkingBlock && !answer
+      ? `<div class="answer-text"><span class="subtle">${escapeHtml(item.pendingLabel)}</span></div>`
+      : "";
 
-  return `<div class="message assistant${thinkingBlock && !answer ? " thinking-message" : ""}">${thinkingBlock}${answer}${waiting}</div>`;
+  return `<div class="message assistant${thinkingBlock && !answer ? " thinking-message" : ""}">${thinkingBlock}${answer}${waiting}${statusLine}</div>`;
 }
 
 function renderImageAttachments(images: ChatEntry["images"]): string {
@@ -499,6 +549,8 @@ function bindEvents(): void {
     void sendMessage();
   });
 
+  document.querySelector<HTMLTextAreaElement>("#promptInput")?.addEventListener("paste", handleImagePaste);
+
   document.querySelector<HTMLButtonElement>("#stopButton")?.addEventListener("click", () => {
     abortController?.abort();
   });
@@ -565,6 +617,16 @@ function setPendingImage(file: File | null): void {
     : null;
 }
 
+function handleImagePaste(event: ClipboardEvent): void {
+  const items = Array.from(event.clipboardData?.items || []);
+  const imageItem = items.find((item) => item.kind === "file" && item.type.startsWith("image/"));
+  const file = imageItem?.getAsFile();
+  if (!file) return;
+  event.preventDefault();
+  setPendingImage(file);
+  render();
+}
+
 function revokeChatImageUrls(): void {
   setPendingImage(null);
   for (const entry of chat) {
@@ -629,6 +691,7 @@ async function loadModel(): Promise<void> {
       appendLog("WebGPU is not available. Wllama may fall back or fail depending on this browser.");
     }
 
+    installModelHeadSizeShim();
     appendLog(`Model source: ${state.llmUrl}`);
     await wllama.loadModelFromUrl(
       {
@@ -642,12 +705,18 @@ async function loadModel(): Promise<void> {
         n_batch: state.batch,
         n_gpu_layers: state.gpuLayers,
         flash_attn: true,
+        jinja: true,
         cache_type_k: "f16",
         cache_type_v: "f16",
         cache_idle_slots: true,
         mmproj_offload: false,
         warmup: false,
         reasoning: true,
+        default_template_kwargs: {
+          enable_thinking: state.thinking === "enabled" ? "true" : "false",
+        },
+        image_min_tokens: IMAGE_MIN_TOKENS,
+        image_max_tokens: IMAGE_MAX_TOKENS,
         seed: state.seed >= 0 ? state.seed : Math.floor(Math.random() * 2_147_483_647),
         progressCallback: ({ loaded, total }) => {
           loadStats.loaded = loaded;
@@ -733,6 +802,22 @@ function chatEntryToCompletionMessage(entry: ChatEntry): ChatCompletionMessage {
   };
 }
 
+function updateGenerationStatus(assistantIndex: number, label: string, startedAt: number, autoscroll = true): void {
+  const assistant = chat[assistantIndex];
+  if (assistant?.role === "assistant" && assistant.isStreaming && !assistant.content.trim()) {
+    assistant.pendingLabel = label;
+  }
+  const elapsed = (performance.now() - startedAt) / 1000;
+  currentLog = [
+    `${label} ${formatSeconds(elapsed)}`,
+    lastTimings ? `Prompt ${lastTimings.prompt_per_second.toFixed(1)} tok/s` : "",
+    lastTimings ? `Output ${lastTimings.predicted_per_second.toFixed(1)} tok/s` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  render({ autoscroll });
+}
+
 async function sendMessage(): Promise<void> {
   if (!wllama || !modelLoaded || generating) return;
   syncInputs();
@@ -759,7 +844,12 @@ async function sendMessage(): Promise<void> {
     images: attachedImage ? [{ name: attachedImage.name, url: attachedImage.url, data: imageData || undefined }] : undefined,
   });
   const assistantIndex = chat.length;
-  chat.push({ role: "assistant", content: "", isStreaming: true });
+  chat.push({
+    role: "assistant",
+    content: "",
+    isStreaming: true,
+    pendingLabel: imageData ? "Processing image..." : "Preparing response...",
+  });
   state.prompt = "";
   imageAttachment = null;
   generating = true;
@@ -768,6 +858,7 @@ async function sendMessage(): Promise<void> {
   const startedAt = performance.now();
   const thinkParser: ThinkParseState = { inThinking: false, tagBuffer: "" };
   render();
+  let statusTimer: number | undefined;
 
   try {
     const userTurn = {
@@ -800,14 +891,35 @@ async function sendMessage(): Promise<void> {
       },
     };
 
+    updateGenerationStatus(
+      assistantIndex,
+      imageData ? `Processing image (${formatBytes(imageData.byteLength)})...` : "Processing prompt...",
+      startedAt
+    );
+    statusTimer = window.setInterval(() => {
+      updateGenerationStatus(
+        assistantIndex,
+        imageData ? `Processing image (${formatBytes(imageData.byteLength)})...` : "Processing prompt...",
+        startedAt,
+        false
+      );
+    }, 1000);
+
     await wllama.createChatCompletion({
       ...request,
       stream: true,
       abortSignal: abortController.signal,
       onData: (chunk: ChatCompletionChunk) => {
+        if (statusTimer !== undefined) {
+          window.clearInterval(statusTimer);
+          statusTimer = undefined;
+        }
         const delta = extractStreamParts(chunk, thinkParser);
         lastTimings = chunk.timings || lastTimings;
         const assistant = chat[assistantIndex];
+        if (assistant?.role === "assistant") {
+          assistant.pendingLabel = state.thinking === "enabled" && !assistant.content.trim() ? "Thinking..." : undefined;
+        }
         if (assistant?.role === "assistant") {
           if (delta.answer) {
             assistant.content = delta.replaceAnswer ? cleanDisplayText(delta.answer) : appendDisplayText(assistant.content, delta.answer);
@@ -838,10 +950,23 @@ async function sendMessage(): Promise<void> {
       if (flushed.thinking) assistant.thinking = appendDisplayText(assistant.thinking, flushed.thinking);
     }
     if (assistant?.role === "assistant" && !cleanDisplayText(assistant.content)) {
-      currentLog = "Stream returned timings but no visible text. Fetching final response...";
+      currentLog = "Stream returned timings but no visible answer. Fetching direct answer...";
       render();
+      const directMessages = [
+        {
+          role: "system",
+          content: "Answer directly and concisely. Do not include thinking, reasoning traces, or <think> sections.",
+        },
+        ...history,
+        userTurn,
+      ] as ChatCompletionMessage[];
       const response = await wllama.createChatCompletion({
         ...request,
+        messages: directMessages,
+        max_tokens: Math.max(128, state.maxTokens),
+        chat_template_kwargs: {
+          enable_thinking: false,
+        },
         stream: false,
         abortSignal: abortController.signal,
       });
@@ -853,6 +978,7 @@ async function sendMessage(): Promise<void> {
       assistant.content = cleanDisplayText(assistant.content);
       assistant.thinking = cleanDisplayText(assistant.thinking || "");
       assistant.isStreaming = false;
+      assistant.pendingLabel = undefined;
     }
     const elapsed = (performance.now() - startedAt) / 1000;
     currentLog = formatDoneLog(elapsed, lastTimings);
@@ -863,9 +989,13 @@ async function sendMessage(): Promise<void> {
     }
     if (last?.role === "assistant") {
       last.isStreaming = false;
+      last.pendingLabel = undefined;
     }
     currentLog = `Generation stopped:\n${errorToText(error)}`;
   } finally {
+    if (statusTimer !== undefined) {
+      window.clearInterval(statusTimer);
+    }
     generating = false;
     abortController = null;
     render();
