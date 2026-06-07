@@ -22,17 +22,29 @@ type Role = "user" | "assistant";
 type ChatEntry = {
   role: Role;
   content: string;
+  thinking?: string;
+  thinkingOpen?: boolean;
 };
 
-type StreamText = {
-  text: string;
-  replace: boolean;
+type StreamParts = {
+  answer: string;
+  thinking: string;
+  replaceAnswer: boolean;
+  replaceThinking: boolean;
 };
+
+type ThinkParseState = {
+  inThinking: boolean;
+  tagBuffer: string;
+};
+
+type LoadPhase = "idle" | "preparing" | "downloading" | "initializing" | "ready" | "error";
 
 type LoadStats = {
   loaded: number;
   total: number;
   startedAt: number;
+  phaseStartedAt: number;
   doneAt?: number;
 };
 
@@ -44,8 +56,9 @@ const app = root;
 let wllama: Wllama | null = null;
 let modelLoaded = false;
 let loading = false;
+let loadPhase: LoadPhase = "idle";
 let generating = false;
-let loadStats: LoadStats = { loaded: 0, total: TOTAL_DOWNLOAD_BYTES, startedAt: 0 };
+let loadStats: LoadStats = { loaded: 0, total: TOTAL_DOWNLOAD_BYTES, startedAt: 0, phaseStartedAt: 0 };
 let chat: ChatEntry[] = [];
 let imageFile: File | null = null;
 let abortController: AbortController | null = null;
@@ -62,6 +75,7 @@ const state = {
   maxTokens: Number(params.get("maxTokens") || 384),
   temperature: Number(params.get("temperature") || 0.7),
   topP: Number(params.get("topP") || 0.95),
+  thinking: params.get("thinking") === "hidden" ? "hidden" : "collapsed",
   seed: Number(params.get("seed") || -1),
   prompt:
     params.get("prompt") ||
@@ -91,9 +105,53 @@ function elapsedLoadSeconds(): number {
   return (end - loadStats.startedAt) / 1000;
 }
 
+function elapsedPhaseSeconds(): number {
+  if (!loadStats.phaseStartedAt) return 0;
+  return (performance.now() - loadStats.phaseStartedAt) / 1000;
+}
+
+function setLoadPhase(phase: LoadPhase): void {
+  if (loadPhase === phase) return;
+  loadPhase = phase;
+  loadStats.phaseStartedAt = performance.now();
+}
+
 function loadPercent(): number {
   if (!loadStats.total) return 0;
   return Math.max(0, Math.min(100, (loadStats.loaded / loadStats.total) * 100));
+}
+
+function statusLabel(): string {
+  if (modelLoaded) return "ready";
+  if (!loading) return loadPhase === "error" ? "error" : "idle";
+  if (loadPhase === "downloading") return "downloading";
+  if (loadPhase === "initializing") return "initializing";
+  return "preparing";
+}
+
+function loadTitle(): string {
+  if (modelLoaded) return "Model ready";
+  if (loadPhase === "preparing") return "Preparing runtime";
+  if (loadPhase === "downloading") return "Downloading model assets";
+  if (loadPhase === "initializing") return "Loading model into WebGPU";
+  if (loadPhase === "error") return "Load failed";
+  return "Download model assets";
+}
+
+function loadDetail(progress: number): string {
+  if (modelLoaded) return `Ready in ${formatSeconds(elapsedLoadSeconds())}`;
+  if (loading && loadPhase === "preparing") {
+    return `Starting browser runtime | ${formatSeconds(elapsedPhaseSeconds())}`;
+  }
+  if (loading && loadPhase === "downloading") {
+    return `${progress.toFixed(1)}% | ${formatBytes(loadStats.loaded)} / ${formatBytes(loadStats.total)} | ${formatBytes(
+      loadStats.loaded / Math.max(elapsedLoadSeconds(), 0.1)
+    )}/s`;
+  }
+  if (loading && loadPhase === "initializing") {
+    return `Download complete | Initializing ${formatSeconds(elapsedPhaseSeconds())}`;
+  }
+  return "4.34 GB";
 }
 
 function webgpuStatus(): string {
@@ -132,16 +190,38 @@ function appendLog(message: string): void {
   el.scrollTop = el.scrollHeight;
 }
 
+function renderMessage(item: ChatEntry, index: number): string {
+  if (item.role === "user") {
+    return `<div class="message user">${escapeHtml(item.content)}</div>`;
+  }
+
+  const thinking = item.thinking?.trim() || "";
+  const shouldShowThinking = state.thinking === "collapsed" && thinking.length > 0;
+  const arrow = item.thinkingOpen ? "^" : "v";
+  const thinkingBlock = shouldShowThinking
+    ? `<div class="thinking-block">
+        <button class="thinking-toggle" type="button" data-thinking-index="${index}">
+          <span>Thinking...</span>
+          <span class="thinking-arrow">${arrow}</span>
+        </button>
+        ${
+          item.thinkingOpen
+            ? `<div class="thinking-content">${escapeHtml(thinking)}</div>`
+            : ""
+        }
+      </div>`
+    : "";
+  const answer = item.content.trim()
+    ? escapeHtml(item.content)
+    : `<span class="subtle">Waiting for response...</span>`;
+
+  return `<div class="message assistant">${thinkingBlock}<div class="answer-text">${answer}</div></div>`;
+}
+
 function render(): void {
   const progress = loadPercent();
-  const loadLabel = modelLoaded
-    ? "Model ready"
-    : loading
-      ? `${formatBytes(loadStats.loaded)} / ${formatBytes(loadStats.total)}`
-      : "Download model assets";
-  const loadSub = loading
-    ? `${progress.toFixed(1)}% | ${formatBytes(loadStats.loaded / Math.max(elapsedLoadSeconds(), 0.1))}/s | ${formatSeconds(elapsedLoadSeconds())}`
-    : "4.34 GB";
+  const progressClass = loadPhase === "initializing" ? "progress indeterminate" : "progress";
+  const barWidth = loadPhase === "preparing" && loading ? 8 : loadPhase === "initializing" ? 100 : progress;
 
   app.innerHTML = `
     <main class="app">
@@ -180,7 +260,7 @@ function render(): void {
       <section class="shell">
         <section class="panel chat-panel">
           <div class="status-strip">
-            <div class="metric"><span>Status</span><strong>${modelLoaded ? "ready" : loading ? "loading" : "idle"}</strong></div>
+            <div class="metric"><span>Status</span><strong>${statusLabel()}</strong></div>
             <div class="metric"><span>WebGPU</span><strong>${webgpuStatus()}</strong></div>
             <div class="metric"><span>Prompt</span><strong>${lastTimings ? `${lastTimings.prompt_per_second.toFixed(1)} tok/s` : "-"}</strong></div>
             <div class="metric"><span>Generate</span><strong>${lastTimings ? `${lastTimings.predicted_per_second.toFixed(1)} tok/s` : "-"}</strong></div>
@@ -190,7 +270,7 @@ function render(): void {
             ${
               chat.length
                 ? `<div class="message-list">${chat
-                    .map((item) => `<div class="message ${item.role}">${escapeHtml(item.content)}</div>`)
+                    .map((item, index) => renderMessage(item, index))
                     .join("")}</div>`
                 : `<div class="empty"><div><h2>Ask Gemma 4 locally</h2><p class="subtle">Download once, then chat from browser cache.</p></div></div>`
             }
@@ -216,11 +296,11 @@ function render(): void {
 
         <aside class="side">
           <section class="panel card">
-            <h2>${loadLabel}</h2>
-            <p class="subtle">${loadSub}</p>
+            <h2>${loadTitle()}</h2>
+            <p class="subtle">${loadDetail(progress)}</p>
             <div class="field">
-              <div class="progress" aria-label="Download progress">
-                <div class="bar" style="width: ${progress}%"></div>
+              <div class="${progressClass}" aria-label="Model loading progress">
+                <div class="bar" style="width: ${barWidth}%"></div>
               </div>
             </div>
             ${!loading && !modelLoaded ? `<div class="field"><button class="button primary" id="loadButton">Start download</button></div>` : ""}
@@ -247,6 +327,13 @@ function render(): void {
                 <label for="seed">Seed</label>
                 <input id="seed" type="number" step="1" value="${state.seed}" />
               </div>
+            </div>
+            <div class="field">
+              <label for="thinking">Thinking</label>
+              <select id="thinking">
+                <option value="collapsed" ${state.thinking === "collapsed" ? "selected" : ""}>Show collapsed</option>
+                <option value="hidden" ${state.thinking === "hidden" ? "selected" : ""}>Hide</option>
+              </select>
             </div>
           </section>
 
@@ -316,6 +403,7 @@ function syncInputs(): void {
   state.maxTokens = getNumberValue("maxTokens", state.maxTokens);
   state.temperature = getNumberValue("temperature", state.temperature);
   state.topP = getNumberValue("topP", state.topP);
+  state.thinking = getInputValue("thinking", state.thinking) === "hidden" ? "hidden" : "collapsed";
   state.seed = getNumberValue("seed", state.seed);
 }
 
@@ -369,7 +457,23 @@ function bindEvents(): void {
     render();
   });
 
+  document.querySelector<HTMLSelectElement>("#thinking")?.addEventListener("change", () => {
+    syncInputs();
+    render();
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-thinking-index]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const index = Number(button.dataset.thinkingIndex);
+      const entry = chat[index];
+      if (!entry || entry.role !== "assistant") return;
+      entry.thinkingOpen = !entry.thinkingOpen;
+      render();
+    });
+  });
+
   document.querySelector<HTMLButtonElement>("#googleSingleButton")?.addEventListener("click", () => {
+    syncInputs();
     state.llmUrl = GOOGLE_SINGLE_GGUF;
     modelLoaded = false;
     render();
@@ -382,8 +486,10 @@ async function loadModel(): Promise<void> {
   syncInputs();
 
   loading = true;
-  loadStats = { loaded: 0, total: TOTAL_DOWNLOAD_BYTES, startedAt: performance.now() };
-  currentLog = "Creating Wllama runtime...";
+  const startedAt = performance.now();
+  loadStats = { loaded: 0, total: TOTAL_DOWNLOAD_BYTES, startedAt, phaseStartedAt: startedAt };
+  setLoadPhase("preparing");
+  currentLog = "Preparing browser runtime...";
   render();
 
   try {
@@ -401,7 +507,7 @@ async function loadModel(): Promise<void> {
       appendLog("WebGPU is not available. Wllama may fall back or fail depending on this browser.");
     }
 
-    appendLog(`Loading ${state.llmUrl}`);
+    appendLog(`Model source: ${state.llmUrl}`);
     await wllama.loadModelFromUrl(
       {
         url: state.llmUrl,
@@ -421,7 +527,21 @@ async function loadModel(): Promise<void> {
         progressCallback: ({ loaded, total }) => {
           loadStats.loaded = loaded;
           loadStats.total = total || loadStats.total || TOTAL_DOWNLOAD_BYTES;
-          currentLog = `Downloading model assets...\n${formatBytes(loadStats.loaded)} / ${formatBytes(loadStats.total)}`;
+          if (loadStats.total && loadStats.loaded >= loadStats.total) {
+            setLoadPhase("initializing");
+            currentLog = [
+              "Download complete.",
+              `Initializing WebGPU model for ${formatSeconds(elapsedPhaseSeconds())}`,
+              "This step loads weights and builds GPU resources.",
+            ].join("\n");
+          } else {
+            setLoadPhase("downloading");
+            currentLog = [
+              "Downloading model assets...",
+              `${formatBytes(loadStats.loaded)} / ${formatBytes(loadStats.total)}`,
+              `${formatBytes(loadStats.loaded / Math.max(elapsedLoadSeconds(), 0.1))}/s`,
+            ].join("\n");
+          }
           render();
         },
       }
@@ -429,6 +549,7 @@ async function loadModel(): Promise<void> {
 
     loadStats.doneAt = performance.now();
     modelLoaded = true;
+    setLoadPhase("ready");
     currentLog = [
       `Loaded in ${formatSeconds(elapsedLoadSeconds())}`,
       `libllama ${Wllama.getLibllamaVersion()}`,
@@ -436,6 +557,7 @@ async function loadModel(): Promise<void> {
       `modalities image=${safeSupport("image")} audio=${safeSupport("audio")}`,
     ].join("\n");
   } catch (error) {
+    setLoadPhase("error");
     currentLog = `Load failed:\n${errorToText(error)}`;
     modelLoaded = false;
     void wllama?.exit().catch(() => undefined);
@@ -493,6 +615,7 @@ async function sendMessage(): Promise<void> {
   abortController = new AbortController();
   lastTimings = undefined;
   const startedAt = performance.now();
+  const thinkParser: ThinkParseState = { inThinking: false, tagBuffer: "" };
   render();
 
   try {
@@ -500,8 +623,18 @@ async function sendMessage(): Promise<void> {
       role: "user",
       content,
     } as ChatCompletionMessage;
+    const thinkingInstruction =
+      state.thinking === "hidden"
+        ? ([
+            {
+              role: "system",
+              content: "Answer directly. Do not include thinking, reasoning traces, or <think> sections.",
+            },
+          ] as ChatCompletionMessage[])
+        : [];
     const request: ChatCompletionParams = {
       messages: [
+        ...thinkingInstruction,
         ...history,
         userTurn,
       ],
@@ -518,16 +651,22 @@ async function sendMessage(): Promise<void> {
       stream: true,
       abortSignal: abortController.signal,
       onData: (chunk: ChatCompletionChunk) => {
-        const delta = extractStreamText(chunk);
+        const delta = extractStreamParts(chunk, thinkParser);
         lastTimings = chunk.timings || lastTimings;
         const assistant = chat[assistantIndex];
-        if (assistant?.role === "assistant" && delta.text) {
-          assistant.content = delta.replace ? delta.text : assistant.content + delta.text;
+        if (assistant?.role === "assistant") {
+          if (delta.answer) {
+            assistant.content = delta.replaceAnswer ? delta.answer : assistant.content + delta.answer;
+          }
+          if (delta.thinking) {
+            assistant.thinking = delta.replaceThinking ? delta.thinking : `${assistant.thinking || ""}${delta.thinking}`;
+          }
         }
         const elapsed = (performance.now() - startedAt) / 1000;
         currentLog = [
           `Generating ${formatSeconds(elapsed)}`,
-          assistant?.content ? `Visible text ${assistant.content.length} chars` : "Waiting for text delta...",
+          assistant?.content ? `Answer ${assistant.content.length} chars` : "Waiting for answer text...",
+          assistant?.thinking ? `Thinking ${assistant.thinking.length} chars` : "",
           lastTimings ? `Prompt ${lastTimings.prompt_per_second.toFixed(1)} tok/s` : "",
           lastTimings ? `Output ${lastTimings.predicted_per_second.toFixed(1)} tok/s` : "",
         ]
@@ -537,6 +676,11 @@ async function sendMessage(): Promise<void> {
       },
     });
     const assistant = chat[assistantIndex];
+    const flushed = flushThinkParser(thinkParser);
+    if (assistant?.role === "assistant") {
+      if (flushed.answer) assistant.content += flushed.answer;
+      if (flushed.thinking) assistant.thinking = `${assistant.thinking || ""}${flushed.thinking}`;
+    }
     if (assistant?.role === "assistant" && !assistant.content.trim()) {
       currentLog = "Stream returned timings but no visible text. Fetching final response...";
       render();
@@ -545,7 +689,9 @@ async function sendMessage(): Promise<void> {
         stream: false,
         abortSignal: abortController.signal,
       });
-      assistant.content = extractFinalText(response);
+      const finalParts = extractFinalParts(response);
+      assistant.content = finalParts.answer;
+      assistant.thinking = finalParts.thinking || assistant.thinking;
     }
     const elapsed = (performance.now() - startedAt) / 1000;
     currentLog = formatDoneLog(elapsed, lastTimings);
@@ -595,7 +741,69 @@ function textFromValue(value: unknown): string {
   return "";
 }
 
-function extractStreamText(chunk: unknown): StreamText {
+function splitTaggedThinking(text: string, state: ThinkParseState): { answer: string; thinking: string } {
+  let answer = "";
+  let thinking = "";
+  const tags = ["<think>", "</think>", "<thinking>", "</thinking>"];
+
+  const pushText = (value: string) => {
+    if (state.inThinking) {
+      thinking += value;
+    } else {
+      answer += value;
+    }
+  };
+
+  for (const char of text) {
+    if (state.tagBuffer) {
+      state.tagBuffer += char;
+      const lower = state.tagBuffer.toLowerCase();
+      if (lower === "<think>" || lower === "<thinking>") {
+        state.inThinking = true;
+        state.tagBuffer = "";
+        continue;
+      }
+      if (lower === "</think>" || lower === "</thinking>") {
+        state.inThinking = false;
+        state.tagBuffer = "";
+        continue;
+      }
+      if (tags.some((tag) => tag.startsWith(lower))) {
+        continue;
+      }
+      pushText(state.tagBuffer);
+      state.tagBuffer = "";
+      continue;
+    }
+
+    if (char === "<") {
+      state.tagBuffer = char;
+      continue;
+    }
+    pushText(char);
+  }
+
+  return { answer, thinking };
+}
+
+function flushThinkParser(state: ThinkParseState): { answer: string; thinking: string } {
+  if (!state.tagBuffer) return { answer: "", thinking: "" };
+  const pending = state.tagBuffer;
+  state.tagBuffer = "";
+  return state.inThinking ? { answer: "", thinking: pending } : { answer: pending, thinking: "" };
+}
+
+function splitCompleteTaggedThinking(text: string): { answer: string; thinking: string } {
+  const parser: ThinkParseState = { inThinking: false, tagBuffer: "" };
+  const parts = splitTaggedThinking(text, parser);
+  const flushed = flushThinkParser(parser);
+  return {
+    answer: parts.answer + flushed.answer,
+    thinking: parts.thinking + flushed.thinking,
+  };
+}
+
+function extractStreamParts(chunk: unknown, state: ThinkParseState): StreamParts {
   const data = chunk as Record<string, unknown>;
   const choices = Array.isArray(data.choices) ? (data.choices as Array<Record<string, unknown>>) : [];
   const choice = choices[0] || {};
@@ -603,9 +811,16 @@ function extractStreamText(chunk: unknown): StreamText {
   const message = (choice.message && typeof choice.message === "object" ? choice.message : {}) as Record<string, unknown>;
   const token = (data.token && typeof data.token === "object" ? data.token : {}) as Record<string, unknown>;
 
+  const explicitThinking =
+    textFromValue(delta.reasoning_content) ||
+    textFromValue(delta.thinking) ||
+    textFromValue(message.reasoning_content) ||
+    textFromValue(message.thinking) ||
+    textFromValue(data.reasoning_content) ||
+    textFromValue(data.thinking);
+
   const appendText =
     textFromValue(delta.content) ||
-    textFromValue(delta.reasoning_content) ||
     textFromValue(delta.text) ||
     textFromValue(choice.text) ||
     textFromValue(data.content) ||
@@ -613,18 +828,27 @@ function extractStreamText(chunk: unknown): StreamText {
     textFromValue(data.text) ||
     textFromValue(token.text);
 
-  if (appendText) return { text: appendText, replace: false };
+  const replacementText = textFromValue(message.content) || textFromValue(data.message);
+  const appendParts = splitTaggedThinking(appendText, state);
+  const replacementParts = replacementText ? splitCompleteTaggedThinking(replacementText) : { answer: "", thinking: "" };
 
-  const replacementText =
-    textFromValue(message.content) ||
-    textFromValue(message.reasoning_content) ||
-    textFromValue(data.message);
-
-  return { text: replacementText, replace: Boolean(replacementText) };
+  return {
+    answer: appendParts.answer || replacementParts.answer,
+    thinking: explicitThinking || appendParts.thinking || replacementParts.thinking,
+    replaceAnswer: Boolean(replacementParts.answer),
+    replaceThinking: Boolean(explicitThinking || replacementParts.thinking),
+  };
 }
 
-function extractFinalText(response: ChatCompletionResponse): string {
-  return textFromValue(response.choices?.[0]?.message?.content);
+function extractFinalParts(response: ChatCompletionResponse): { answer: string; thinking: string } {
+  const message = response.choices?.[0]?.message as unknown as Record<string, unknown> | undefined;
+  const content = textFromValue(message?.content);
+  const explicitThinking = textFromValue(message?.reasoning_content) || textFromValue(message?.thinking);
+  const parsed = splitCompleteTaggedThinking(content);
+  return {
+    answer: parsed.answer,
+    thinking: explicitThinking || parsed.thinking,
+  };
 }
 
 render();
