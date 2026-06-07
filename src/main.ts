@@ -75,7 +75,7 @@ const state = {
   maxTokens: Number(params.get("maxTokens") || 384),
   temperature: Number(params.get("temperature") || 0.7),
   topP: Number(params.get("topP") || 0.95),
-  thinking: params.get("thinking") === "hidden" ? "hidden" : "collapsed",
+  thinking: params.get("thinking") === "enabled" ? "enabled" : "disabled",
   seed: Number(params.get("seed") || -1),
   prompt:
     params.get("prompt") ||
@@ -159,12 +159,26 @@ function webgpuStatus(): string {
   return modelLoaded && wllama?.isSupportWebGPU() ? "ready" : "available";
 }
 
-function iconSvg(name: "settings" | "newChat"): string {
+function iconSvg(name: "settings" | "newChat" | "chevronDown" | "chevronUp"): string {
   if (name === "settings") {
     return `
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"></path>
         <path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.05.05a2.1 2.1 0 1 1-2.97 2.97l-.05-.05a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.09 1.65V21a2.1 2.1 0 1 1-4.2 0v-.07a1.8 1.8 0 0 0-1.18-1.67 1.8 1.8 0 0 0-1.98.36l-.05.05a2.1 2.1 0 1 1-2.97-2.97l.05-.05a1.8 1.8 0 0 0 .36-1.98 1.8 1.8 0 0 0-1.65-1.09H3a2.1 2.1 0 1 1 0-4.2h.07a1.8 1.8 0 0 0 1.67-1.18 1.8 1.8 0 0 0-.36-1.98l-.05-.05A2.1 2.1 0 1 1 7.3 3.3l.05.05a1.8 1.8 0 0 0 1.98.36H9.4A1.8 1.8 0 0 0 10.5 2h3a1.8 1.8 0 0 0 1.09 1.65 1.8 1.8 0 0 0 1.98-.36l.05-.05a2.1 2.1 0 1 1 2.97 2.97l-.05.05a1.8 1.8 0 0 0-.36 1.98v.07A1.8 1.8 0 0 0 21 9.5h.07a2.1 2.1 0 1 1 0 4.2H21a1.8 1.8 0 0 0-1.6 1.3Z"></path>
+      </svg>
+    `;
+  }
+  if (name === "chevronUp") {
+    return `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m6 15 6-6 6 6"></path>
+      </svg>
+    `;
+  }
+  if (name === "chevronDown") {
+    return `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m6 9 6 6 6-6"></path>
       </svg>
     `;
   }
@@ -196,8 +210,8 @@ function renderMessage(item: ChatEntry, index: number): string {
   }
 
   const thinking = item.thinking?.trim() || "";
-  const shouldShowThinking = state.thinking === "collapsed" && thinking.length > 0;
-  const arrow = item.thinkingOpen ? "^" : "v";
+  const shouldShowThinking = state.thinking === "enabled" && thinking.length > 0;
+  const arrow = item.thinkingOpen ? iconSvg("chevronUp") : iconSvg("chevronDown");
   const thinkingBlock = shouldShowThinking
     ? `<div class="thinking-block">
         <button class="thinking-toggle" type="button" data-thinking-index="${index}">
@@ -211,11 +225,10 @@ function renderMessage(item: ChatEntry, index: number): string {
         }
       </div>`
     : "";
-  const answer = item.content.trim()
-    ? escapeHtml(item.content)
-    : `<span class="subtle">Waiting for response...</span>`;
+  const answer = item.content.trim() ? `<div class="answer-text">${escapeHtml(item.content)}</div>` : "";
+  const waiting = !answer && !thinkingBlock ? `<div class="answer-text"><span class="subtle">Waiting for response...</span></div>` : "";
 
-  return `<div class="message assistant">${thinkingBlock}<div class="answer-text">${answer}</div></div>`;
+  return `<div class="message assistant${thinkingBlock && !answer ? " thinking-message" : ""}">${thinkingBlock}${answer}${waiting}</div>`;
 }
 
 function render(): void {
@@ -329,10 +342,10 @@ function render(): void {
               </div>
             </div>
             <div class="field">
-              <label for="thinking">Thinking</label>
+              <label for="thinking">Model thinking</label>
               <select id="thinking">
-                <option value="collapsed" ${state.thinking === "collapsed" ? "selected" : ""}>Show collapsed</option>
-                <option value="hidden" ${state.thinking === "hidden" ? "selected" : ""}>Hide</option>
+                <option value="disabled" ${state.thinking === "disabled" ? "selected" : ""}>Disabled</option>
+                <option value="enabled" ${state.thinking === "enabled" ? "selected" : ""}>Enabled</option>
               </select>
             </div>
           </section>
@@ -403,7 +416,7 @@ function syncInputs(): void {
   state.maxTokens = getNumberValue("maxTokens", state.maxTokens);
   state.temperature = getNumberValue("temperature", state.temperature);
   state.topP = getNumberValue("topP", state.topP);
-  state.thinking = getInputValue("thinking", state.thinking) === "hidden" ? "hidden" : "collapsed";
+  state.thinking = getInputValue("thinking", state.thinking) === "enabled" ? "enabled" : "disabled";
   state.seed = getNumberValue("seed", state.seed);
 }
 
@@ -624,7 +637,7 @@ async function sendMessage(): Promise<void> {
       content,
     } as ChatCompletionMessage;
     const thinkingInstruction =
-      state.thinking === "hidden"
+      state.thinking === "disabled"
         ? ([
             {
               role: "system",
@@ -644,6 +657,9 @@ async function sendMessage(): Promise<void> {
       seed: state.seed >= 0 ? state.seed : undefined,
       cache_prompt: true,
       timings_per_token: true,
+      chat_template_kwargs: {
+        enable_thinking: state.thinking === "enabled",
+      },
     };
 
     await wllama.createChatCompletion({
@@ -666,7 +682,7 @@ async function sendMessage(): Promise<void> {
         currentLog = [
           `Generating ${formatSeconds(elapsed)}`,
           assistant?.content ? `Answer ${assistant.content.length} chars` : "Waiting for answer text...",
-          assistant?.thinking ? `Thinking ${assistant.thinking.length} chars` : "",
+          state.thinking === "enabled" && assistant?.thinking ? `Thinking ${assistant.thinking.length} chars` : "",
           lastTimings ? `Prompt ${lastTimings.prompt_per_second.toFixed(1)} tok/s` : "",
           lastTimings ? `Output ${lastTimings.predicted_per_second.toFixed(1)} tok/s` : "",
         ]
