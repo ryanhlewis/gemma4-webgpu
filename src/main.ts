@@ -1,5 +1,11 @@
 import { LoggerWithoutDebug, Wllama } from "@wllama/wllama";
-import type { ChatCompletionChunk, ChatCompletionMessage, ResultTimings } from "@wllama/wllama";
+import type {
+  ChatCompletionChunk,
+  ChatCompletionMessage,
+  ChatCompletionParams,
+  ChatCompletionResponse,
+  ResultTimings,
+} from "@wllama/wllama";
 import wasmUrl from "@wllama/wllama/esm/wasm/wllama.wasm?url";
 import "./style.css";
 
@@ -16,6 +22,11 @@ type Role = "user" | "assistant";
 type ChatEntry = {
   role: Role;
   content: string;
+};
+
+type StreamText = {
+  text: string;
+  replace: boolean;
 };
 
 type LoadStats = {
@@ -39,6 +50,7 @@ let chat: ChatEntry[] = [];
 let imageFile: File | null = null;
 let abortController: AbortController | null = null;
 let lastTimings: ResultTimings | undefined;
+let settingsOpen = false;
 
 const state = {
   llmUrl: params.get("modelUrl") || params.get("llmUrl") || DEFAULT_LLM_URL,
@@ -89,6 +101,23 @@ function webgpuStatus(): string {
   return modelLoaded && wllama?.isSupportWebGPU() ? "ready" : "available";
 }
 
+function iconSvg(name: "settings" | "newChat"): string {
+  if (name === "settings") {
+    return `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"></path>
+        <path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.05.05a2.1 2.1 0 1 1-2.97 2.97l-.05-.05a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.09 1.65V21a2.1 2.1 0 1 1-4.2 0v-.07a1.8 1.8 0 0 0-1.18-1.67 1.8 1.8 0 0 0-1.98.36l-.05.05a2.1 2.1 0 1 1-2.97-2.97l.05-.05a1.8 1.8 0 0 0 .36-1.98 1.8 1.8 0 0 0-1.65-1.09H3a2.1 2.1 0 1 1 0-4.2h.07a1.8 1.8 0 0 0 1.67-1.18 1.8 1.8 0 0 0-.36-1.98l-.05-.05A2.1 2.1 0 1 1 7.3 3.3l.05.05a1.8 1.8 0 0 0 1.98.36H9.4A1.8 1.8 0 0 0 10.5 2h3a1.8 1.8 0 0 0 1.09 1.65 1.8 1.8 0 0 0 1.98-.36l.05-.05a2.1 2.1 0 1 1 2.97 2.97l-.05.05a1.8 1.8 0 0 0-.36 1.98v.07A1.8 1.8 0 0 0 21 9.5h.07a2.1 2.1 0 1 1 0 4.2H21a1.8 1.8 0 0 0-1.6 1.3Z"></path>
+      </svg>
+    `;
+  }
+  return `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+      <path d="M18.4 2.6a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4 9.4-9.4Z"></path>
+    </svg>
+  `;
+}
+
 function setLog(message: string): void {
   currentLog = message;
   const el = document.querySelector<HTMLDivElement>("#log");
@@ -125,8 +154,26 @@ function render(): void {
           </div>
         </div>
         <div class="actions">
-          <button class="icon-button" id="clearButton" title="Clear chat">C</button>
-          <button class="icon-button" id="cacheButton" title="Clear model cache">R</button>
+          <button class="icon-button" id="settingsButton" title="Settings" aria-label="Settings">${iconSvg("settings")}</button>
+          <button class="icon-button" id="clearButton" title="New chat" aria-label="New chat">${iconSvg("newChat")}</button>
+          ${
+            settingsOpen
+              ? `<div class="settings-popover panel">
+                  <h2>Model source</h2>
+                  <div class="field">
+                    <label for="llmUrl">LLM GGUF first shard</label>
+                    <input id="llmUrl" class="source" value="${escapeAttr(state.llmUrl)}" />
+                  </div>
+                  <div class="field">
+                    <label for="mmprojUrl">mmproj GGUF</label>
+                    <input id="mmprojUrl" class="source" value="${escapeAttr(state.mmprojUrl)}" />
+                  </div>
+                  <div class="field">
+                    <button class="button" id="googleSingleButton" type="button">Use Google single file</button>
+                  </div>
+                </div>`
+              : ""
+          }
         </div>
       </header>
 
@@ -176,14 +223,7 @@ function render(): void {
                 <div class="bar" style="width: ${progress}%"></div>
               </div>
             </div>
-            <div class="field">
-              <button class="button primary" id="loadButton" ${loading || modelLoaded ? "disabled" : ""}>Start download</button>
-            </div>
-            <div class="pill-row">
-              <span class="pill">LLM q4_0 split</span>
-              <span class="pill">mmproj</span>
-              <span class="pill">WebGPU layers</span>
-            </div>
+            ${!loading && !modelLoaded ? `<div class="field"><button class="button primary" id="loadButton">Start download</button></div>` : ""}
           </section>
 
           <section class="panel card">
@@ -231,21 +271,6 @@ function render(): void {
                 <label for="gpuLayers">GPU layers</label>
                 <input id="gpuLayers" type="number" min="0" max="999" step="1" value="${state.gpuLayers}" />
               </div>
-            </div>
-          </section>
-
-          <section class="panel card">
-            <h2>Model source</h2>
-            <div class="field">
-              <label for="llmUrl">LLM GGUF first shard</label>
-              <input id="llmUrl" class="source" value="${escapeAttr(state.llmUrl)}" />
-            </div>
-            <div class="field">
-              <label for="mmprojUrl">mmproj GGUF</label>
-              <input id="mmprojUrl" class="source" value="${escapeAttr(state.mmprojUrl)}" />
-            </div>
-            <div class="field">
-              <button class="button" id="googleSingleButton" type="button">Use Google single file</button>
             </div>
           </section>
 
@@ -338,8 +363,10 @@ function bindEvents(): void {
     render();
   });
 
-  document.querySelector<HTMLButtonElement>("#cacheButton")?.addEventListener("click", () => {
-    void clearCache();
+  document.querySelector<HTMLButtonElement>("#settingsButton")?.addEventListener("click", () => {
+    syncInputs();
+    settingsOpen = !settingsOpen;
+    render();
   });
 
   document.querySelector<HTMLButtonElement>("#googleSingleButton")?.addEventListener("click", () => {
@@ -451,12 +478,15 @@ async function sendMessage(): Promise<void> {
       ]
     : userMessage;
 
-  const history: ChatCompletionMessage[] = chat.map((entry) => ({
-    role: entry.role,
-    content: entry.content,
-  }));
+  const history: ChatCompletionMessage[] = chat
+    .filter((entry) => entry.content.trim().length > 0)
+    .map((entry) => ({
+      role: entry.role,
+      content: entry.content,
+    }));
 
   chat.push({ role: "user", content: imageFile ? `${userMessage}\n[image: ${imageFile.name}]` : userMessage });
+  const assistantIndex = chat.length;
   chat.push({ role: "assistant", content: "" });
   state.prompt = "";
   generating = true;
@@ -466,29 +496,38 @@ async function sendMessage(): Promise<void> {
   render();
 
   try {
-    await wllama.createChatCompletion({
+    const userTurn = {
+      role: "user",
+      content,
+    } as ChatCompletionMessage;
+    const request: ChatCompletionParams = {
       messages: [
         ...history,
-        {
-          role: "user",
-          content,
-        },
+        userTurn,
       ],
-      stream: true,
       max_tokens: state.maxTokens,
       temperature: state.temperature,
       top_p: state.topP,
+      seed: state.seed >= 0 ? state.seed : undefined,
       cache_prompt: true,
       timings_per_token: true,
+    };
+
+    await wllama.createChatCompletion({
+      ...request,
+      stream: true,
       abortSignal: abortController.signal,
-      onData: (chunk) => {
-        const delta = chunk.choices?.[0]?.delta?.content || "";
+      onData: (chunk: ChatCompletionChunk) => {
+        const delta = extractStreamText(chunk);
         lastTimings = chunk.timings || lastTimings;
-        const last = chat[chat.length - 1];
-        if (last?.role === "assistant") last.content += delta;
+        const assistant = chat[assistantIndex];
+        if (assistant?.role === "assistant" && delta.text) {
+          assistant.content = delta.replace ? delta.text : assistant.content + delta.text;
+        }
         const elapsed = (performance.now() - startedAt) / 1000;
         currentLog = [
           `Generating ${formatSeconds(elapsed)}`,
+          assistant?.content ? `Visible text ${assistant.content.length} chars` : "Waiting for text delta...",
           lastTimings ? `Prompt ${lastTimings.prompt_per_second.toFixed(1)} tok/s` : "",
           lastTimings ? `Output ${lastTimings.predicted_per_second.toFixed(1)} tok/s` : "",
         ]
@@ -497,6 +536,17 @@ async function sendMessage(): Promise<void> {
         render();
       },
     });
+    const assistant = chat[assistantIndex];
+    if (assistant?.role === "assistant" && !assistant.content.trim()) {
+      currentLog = "Stream returned timings but no visible text. Fetching final response...";
+      render();
+      const response = await wllama.createChatCompletion({
+        ...request,
+        stream: false,
+        abortSignal: abortController.signal,
+      });
+      assistant.content = extractFinalText(response);
+    }
     const elapsed = (performance.now() - startedAt) / 1000;
     currentLog = formatDoneLog(elapsed, lastTimings);
   } catch (error) {
@@ -525,6 +575,56 @@ function formatDoneLog(elapsed: number, timings?: ResultTimings): string {
 function errorToText(error: unknown): string {
   if (error instanceof Error) return error.stack || error.message;
   return String(error);
+}
+
+function textFromValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object") {
+          const typed = item as { text?: unknown; content?: unknown };
+          return textFromValue(typed.text || typed.content);
+        }
+        return "";
+      })
+      .join("");
+  }
+  return "";
+}
+
+function extractStreamText(chunk: unknown): StreamText {
+  const data = chunk as Record<string, unknown>;
+  const choices = Array.isArray(data.choices) ? (data.choices as Array<Record<string, unknown>>) : [];
+  const choice = choices[0] || {};
+  const delta = (choice.delta && typeof choice.delta === "object" ? choice.delta : {}) as Record<string, unknown>;
+  const message = (choice.message && typeof choice.message === "object" ? choice.message : {}) as Record<string, unknown>;
+  const token = (data.token && typeof data.token === "object" ? data.token : {}) as Record<string, unknown>;
+
+  const appendText =
+    textFromValue(delta.content) ||
+    textFromValue(delta.reasoning_content) ||
+    textFromValue(delta.text) ||
+    textFromValue(choice.text) ||
+    textFromValue(data.content) ||
+    textFromValue(data.response) ||
+    textFromValue(data.text) ||
+    textFromValue(token.text);
+
+  if (appendText) return { text: appendText, replace: false };
+
+  const replacementText =
+    textFromValue(message.content) ||
+    textFromValue(message.reasoning_content) ||
+    textFromValue(data.message);
+
+  return { text: replacementText, replace: Boolean(replacementText) };
+}
+
+function extractFinalText(response: ChatCompletionResponse): string {
+  return textFromValue(response.choices?.[0]?.message?.content);
 }
 
 render();
