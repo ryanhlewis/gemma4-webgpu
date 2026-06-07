@@ -16,8 +16,8 @@ const DEFAULT_MMPROJ_URL =
 const GOOGLE_SINGLE_GGUF =
   "https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf/resolve/main/gemma-4-E2B_q4_0-it.gguf";
 const TOTAL_DOWNLOAD_BYTES = 3_686_000_000;
-const MAX_IMAGE_DIMENSION = 448;
-const IMAGE_JPEG_QUALITY = 0.88;
+const MAX_IMAGE_DIMENSION = 336;
+const IMAGE_JPEG_QUALITY = 0.82;
 const IMAGE_MIN_TOKENS = 70;
 const IMAGE_MAX_TOKENS = 70;
 const MODEL_ASSET_SIZES = new Map<string, number>([
@@ -69,6 +69,12 @@ type RenderOptions = {
   autoscroll?: boolean;
 };
 
+type ScrollSnapshot = {
+  top: number;
+  bottom: number;
+  stickToBottom: boolean;
+};
+
 type LoadPhase = "idle" | "preparing" | "downloading" | "initializing" | "ready" | "error";
 
 type LoadStats = {
@@ -95,6 +101,7 @@ let imageAttachment: ImageAttachment | null = null;
 let abortController: AbortController | null = null;
 let lastTimings: ResultTimings | undefined;
 let settingsOpen = false;
+let lastImagePrep: { seconds: number; bytes: number } | undefined;
 
 const state = {
   llmUrl: params.get("modelUrl") || params.get("llmUrl") || DEFAULT_LLM_URL,
@@ -235,6 +242,45 @@ function appendLog(message: string): void {
   el.scrollTop = el.scrollHeight;
 }
 
+function isNearScrollEnd(element: Element): boolean {
+  const scrollable = element as HTMLElement;
+  return scrollable.scrollHeight - scrollable.scrollTop - scrollable.clientHeight < 24;
+}
+
+function captureScrollSnapshots(): Map<string, ScrollSnapshot> {
+  const snapshots = new Map<string, ScrollSnapshot>();
+  document.querySelectorAll<HTMLElement>("[data-scroll-key]").forEach((element) => {
+    snapshots.set(element.dataset.scrollKey || "", {
+      top: element.scrollTop,
+      bottom: element.scrollHeight - element.scrollTop,
+      stickToBottom: isNearScrollEnd(element),
+    });
+  });
+  return snapshots;
+}
+
+function restoreScrollSnapshots(snapshots: Map<string, ScrollSnapshot>, shouldAutoscroll: boolean): void {
+  document.querySelectorAll<HTMLElement>("[data-scroll-key]").forEach((element) => {
+    const key = element.dataset.scrollKey || "";
+    const snapshot = snapshots.get(key);
+    if (!snapshot) return;
+    if (shouldAutoscroll && key === "messages" && snapshot.stickToBottom) {
+      element.scrollTop = element.scrollHeight;
+      return;
+    }
+    if (snapshot.stickToBottom && key.startsWith("thinking-")) {
+      element.scrollTop = Math.max(0, element.scrollHeight - snapshot.bottom);
+      return;
+    }
+    element.scrollTop = snapshot.top;
+  });
+
+  if (shouldAutoscroll && !snapshots.has("messages")) {
+    const messages = document.querySelector<HTMLElement>("[data-scroll-key='messages']");
+    if (messages) messages.scrollTop = messages.scrollHeight;
+  }
+}
+
 function installModelHeadSizeShim(): void {
   if (headSizeShimInstalled || typeof globalThis.fetch !== "function") return;
   const originalFetch = globalThis.fetch.bind(globalThis);
@@ -287,7 +333,7 @@ function renderMessage(item: ChatEntry, index: number): string {
         </button>
         ${
           item.thinkingOpen
-            ? `<div class="thinking-content">${thinking ? escapeHtml(thinking) : `<span class="subtle">${escapeHtml(item.pendingLabel || "Waiting for thinking tokens...")}</span>`}</div>`
+            ? `<div class="thinking-content" data-scroll-key="thinking-${index}">${thinking ? escapeHtml(thinking) : `<span class="subtle">${escapeHtml(item.pendingLabel || "Waiting for thinking tokens...")}</span>`}</div>`
             : ""
         }
       </div>`
@@ -313,13 +359,14 @@ function renderImageAttachments(images: ChatEntry["images"]): string {
     .map(
       (image) => `<figure class="image-attachment">
         <img src="${escapeAttr(image.url)}" alt="${escapeAttr(image.name)}" />
-        <figcaption>${escapeHtml(image.name)}</figcaption>
+        <figcaption title="${escapeAttr(image.name)}">${escapeHtml(image.name)}</figcaption>
       </figure>`
     )
     .join("")}</div>`;
 }
 
 function render(options: RenderOptions = {}): void {
+  const scrollSnapshots = captureScrollSnapshots();
   const shouldAutoscroll = options.autoscroll ?? true;
   const progress = loadPercent();
   const progressClass = loadPhase === "initializing" ? "progress indeterminate" : "progress";
@@ -368,7 +415,7 @@ function render(options: RenderOptions = {}): void {
             <div class="metric"><span>Generate</span><strong>${lastTimings ? `${lastTimings.predicted_per_second.toFixed(1)} tok/s` : "-"}</strong></div>
           </div>
 
-          <div class="messages">
+          <div class="messages" data-scroll-key="messages">
             ${
               chat.length
                 ? `<div class="message-list">${chat
@@ -384,7 +431,7 @@ function render(options: RenderOptions = {}): void {
               imageAttachment
                 ? `<div class="pending-attachment">
                     <img src="${escapeAttr(imageAttachment.url)}" alt="${escapeAttr(imageAttachment.name)}" />
-                    <span>${escapeHtml(imageAttachment.name)}</span>
+                    <span title="${escapeAttr(imageAttachment.name)}">${escapeHtml(imageAttachment.name)}</span>
                     <button class="icon-button remove-attachment" type="button" id="removeImageButton" aria-label="Remove image" title="Remove image">&times;</button>
                   </div>`
                 : ""
@@ -393,7 +440,7 @@ function render(options: RenderOptions = {}): void {
               <label class="file-chip">
                 <span class="chip-button">Add image</span>
                 <input id="imageInput" type="file" accept="image/*" />
-                <span class="file-name">${imageAttachment ? escapeHtml(imageAttachment.name) : "Optional image input"}</span>
+                <span class="file-name" title="${imageAttachment ? escapeAttr(imageAttachment.name) : ""}">${imageAttachment ? escapeHtml(imageAttachment.name) : "Optional image input"}</span>
               </label>
               ${
                 generating
@@ -481,12 +528,7 @@ function render(options: RenderOptions = {}): void {
   `;
 
   bindEvents();
-  if (shouldAutoscroll) {
-    requestAnimationFrame(() => {
-      const messages = document.querySelector<HTMLDivElement>(".messages");
-      if (messages) messages.scrollTop = messages.scrollHeight;
-    });
-  }
+  requestAnimationFrame(() => restoreScrollSnapshots(scrollSnapshots, shouldAutoscroll));
 }
 
 let currentLog = "Ready.";
@@ -784,9 +826,9 @@ function shouldKeepHistoryEntry(entry: ChatEntry): boolean {
   return entry.content.trim().length > 0 || Boolean(entry.images?.some((image) => image.data));
 }
 
-function chatEntryToCompletionMessage(entry: ChatEntry): ChatCompletionMessage {
+function chatEntryToCompletionMessage(entry: ChatEntry, includeImages = false): ChatCompletionMessage {
   const images = entry.images?.filter((image) => image.data) || [];
-  if (images.length > 0) {
+  if (includeImages && images.length > 0) {
     return {
       role: entry.role,
       content: [
@@ -810,6 +852,7 @@ function updateGenerationStatus(assistantIndex: number, label: string, startedAt
   const elapsed = (performance.now() - startedAt) / 1000;
   currentLog = [
     `${label} ${formatSeconds(elapsed)}`,
+    lastImagePrep ? `Image prep ${formatSeconds(lastImagePrep.seconds)} ${formatBytes(lastImagePrep.bytes)}` : "",
     lastTimings ? `Prompt ${lastTimings.prompt_per_second.toFixed(1)} tok/s` : "",
     lastTimings ? `Output ${lastTimings.predicted_per_second.toFixed(1)} tok/s` : "",
   ]
@@ -825,7 +868,14 @@ async function sendMessage(): Promise<void> {
 
   const userMessage = state.prompt;
   const attachedImage = imageAttachment;
+  const imagePrepStarted = performance.now();
   const imageData = attachedImage ? await imageFileToArrayBuffer(attachedImage.file) : null;
+  lastImagePrep = imageData
+    ? {
+        seconds: (performance.now() - imagePrepStarted) / 1000,
+        bytes: imageData.byteLength,
+      }
+    : undefined;
   const modelText = userMessage || "Describe the attached image.";
   const content = imageData
     ? [
@@ -836,7 +886,7 @@ async function sendMessage(): Promise<void> {
 
   const history: ChatCompletionMessage[] = chat
     .filter((entry) => shouldKeepHistoryEntry(entry))
-    .map((entry) => chatEntryToCompletionMessage(entry));
+    .map((entry) => chatEntryToCompletionMessage(entry, false));
 
   chat.push({
     role: "user",
@@ -935,6 +985,7 @@ async function sendMessage(): Promise<void> {
           `Generating ${formatSeconds(elapsed)}`,
           assistant?.content ? `Answer ${assistant.content.length} chars` : "Waiting for answer text...",
           state.thinking === "enabled" && assistant?.thinking ? `Thinking ${assistant.thinking.length} chars` : "",
+          lastImagePrep ? `Image prep ${formatSeconds(lastImagePrep.seconds)} ${formatBytes(lastImagePrep.bytes)}` : "",
           lastTimings ? `Prompt ${lastTimings.prompt_per_second.toFixed(1)} tok/s` : "",
           lastTimings ? `Output ${lastTimings.predicted_per_second.toFixed(1)} tok/s` : "",
         ]
@@ -998,6 +1049,7 @@ async function sendMessage(): Promise<void> {
     }
     generating = false;
     abortController = null;
+    lastImagePrep = undefined;
     render();
   }
 }

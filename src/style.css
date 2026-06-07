@@ -232,6 +232,7 @@ h1 {
 }
 
 .message {
+  min-width: 0;
   max-width: 86%;
   padding: 13px 14px;
   border: 1px solid rgba(244, 240, 232, 0.1);
@@ -260,6 +261,7 @@ h1 {
 
 .attachments {
   display: grid;
+  min-width: 0;
   gap: 8px;
   margin-top: 10px;
 }
@@ -270,6 +272,8 @@ h1 {
 
 .image-attachment {
   display: grid;
+  width: min(320px, 100%);
+  min-width: 0;
   gap: 6px;
   max-width: min(320px, 70vw);
   margin: 0;
@@ -286,6 +290,7 @@ h1 {
 }
 
 .image-attachment figcaption {
+  min-width: 0;
   overflow: hidden;
   color: #c9c1b2;
   font-size: 12px;
@@ -295,6 +300,7 @@ h1 {
 
 .thinking-block {
   display: flex;
+  min-width: 0;
   align-items: flex-start;
   flex-direction: column;
   gap: 6px;
@@ -338,6 +344,9 @@ h1 {
 }
 
 .thinking-content {
+  width: min(100%, 720px);
+  max-width: 100%;
+  overflow-wrap: anywhere;
   max-height: 240px;
   overflow: auto;
   border-radius: 6px;
@@ -365,6 +374,8 @@ h1 {
 
 .pending-attachment {
   display: grid;
+  min-width: 0;
+  overflow: hidden;
   grid-template-columns: 44px minmax(0, 1fr) 34px;
   align-items: center;
   gap: 10px;
@@ -383,6 +394,7 @@ h1 {
 }
 
 .pending-attachment span {
+  min-width: 0;
   overflow: hidden;
   color: #c9c1b2;
   font-size: 13px;
@@ -450,6 +462,7 @@ select {
 
 .chip-button {
   display: inline-flex;
+  flex: 0 0 auto;
   min-height: 34px;
   align-items: center;
   gap: 7px;
@@ -461,6 +474,7 @@ select {
 }
 
 .file-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
