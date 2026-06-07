@@ -31,6 +31,8 @@ type ChatEntry = {
   }>;
   thinking?: string;
   thinkingOpen?: boolean;
+  thinkingTouched?: boolean;
+  isStreaming?: boolean;
 };
 
 type ImageAttachment = {
@@ -49,6 +51,10 @@ type StreamParts = {
 type ThinkParseState = {
   inThinking: boolean;
   tagBuffer: string;
+};
+
+type RenderOptions = {
+  autoscroll?: boolean;
 };
 
 type LoadPhase = "idle" | "preparing" | "downloading" | "initializing" | "ready" | "error";
@@ -224,7 +230,7 @@ function renderMessage(item: ChatEntry, index: number): string {
     return `<div class="message user">${text}${images}</div>`;
   }
 
-  const thinking = item.thinking?.trim() || "";
+  const thinking = cleanDisplayText(item.thinking || "");
   const shouldShowThinking = state.thinking === "enabled" && thinking.length > 0;
   const arrow = item.thinkingOpen ? iconSvg("chevronUp") : iconSvg("chevronDown");
   const thinkingBlock = shouldShowThinking
@@ -240,8 +246,13 @@ function renderMessage(item: ChatEntry, index: number): string {
         }
       </div>`
     : "";
-  const answer = item.content.trim() ? `<div class="answer-text">${escapeHtml(item.content)}</div>` : "";
-  const waiting = !answer && !thinkingBlock ? `<div class="answer-text"><span class="subtle">Waiting for response...</span></div>` : "";
+  const answerText = cleanDisplayText(item.content);
+  const answer = answerText ? `<div class="answer-text">${escapeHtml(answerText)}</div>` : "";
+  const pendingText = state.thinking === "enabled" ? "Thinking..." : "Waiting for response...";
+  const waiting =
+    item.isStreaming && !answer && !thinkingBlock
+      ? `<div class="answer-text"><span class="subtle">${pendingText}</span></div>`
+      : "";
 
   return `<div class="message assistant${thinkingBlock && !answer ? " thinking-message" : ""}">${thinkingBlock}${answer}${waiting}</div>`;
 }
@@ -258,7 +269,8 @@ function renderImageAttachments(images: ChatEntry["images"]): string {
     .join("")}</div>`;
 }
 
-function render(): void {
+function render(options: RenderOptions = {}): void {
+  const shouldAutoscroll = options.autoscroll ?? true;
   const progress = loadPercent();
   const progressClass = loadPhase === "initializing" ? "progress indeterminate" : "progress";
   const barWidth = loadPhase === "preparing" && loading ? 8 : loadPhase === "initializing" ? 100 : progress;
@@ -419,10 +431,12 @@ function render(): void {
   `;
 
   bindEvents();
-  requestAnimationFrame(() => {
-    const messages = document.querySelector<HTMLDivElement>(".messages");
-    if (messages) messages.scrollTop = messages.scrollHeight;
-  });
+  if (shouldAutoscroll) {
+    requestAnimationFrame(() => {
+      const messages = document.querySelector<HTMLDivElement>(".messages");
+      if (messages) messages.scrollTop = messages.scrollHeight;
+    });
+  }
 }
 
 let currentLog = "Ready.";
@@ -524,7 +538,8 @@ function bindEvents(): void {
       const entry = chat[index];
       if (!entry || entry.role !== "assistant") return;
       entry.thinkingOpen = !entry.thinkingOpen;
-      render();
+      entry.thinkingTouched = true;
+      render({ autoscroll: false });
     });
   });
 
@@ -632,6 +647,7 @@ async function loadModel(): Promise<void> {
         cache_idle_slots: true,
         mmproj_offload: false,
         warmup: false,
+        reasoning: true,
         seed: state.seed >= 0 ? state.seed : Math.floor(Math.random() * 2_147_483_647),
         progressCallback: ({ loaded, total }) => {
           loadStats.loaded = loaded;
@@ -743,7 +759,7 @@ async function sendMessage(): Promise<void> {
     images: attachedImage ? [{ name: attachedImage.name, url: attachedImage.url, data: imageData || undefined }] : undefined,
   });
   const assistantIndex = chat.length;
-  chat.push({ role: "assistant", content: "" });
+  chat.push({ role: "assistant", content: "", isStreaming: true });
   state.prompt = "";
   imageAttachment = null;
   generating = true;
@@ -794,10 +810,12 @@ async function sendMessage(): Promise<void> {
         const assistant = chat[assistantIndex];
         if (assistant?.role === "assistant") {
           if (delta.answer) {
-            assistant.content = delta.replaceAnswer ? delta.answer : assistant.content + delta.answer;
+            assistant.content = delta.replaceAnswer ? cleanDisplayText(delta.answer) : appendDisplayText(assistant.content, delta.answer);
           }
           if (delta.thinking) {
-            assistant.thinking = delta.replaceThinking ? delta.thinking : `${assistant.thinking || ""}${delta.thinking}`;
+            assistant.thinking = delta.replaceThinking
+              ? cleanDisplayText(delta.thinking)
+              : appendDisplayText(assistant.thinking, delta.thinking);
           }
         }
         const elapsed = (performance.now() - startedAt) / 1000;
@@ -816,10 +834,10 @@ async function sendMessage(): Promise<void> {
     const assistant = chat[assistantIndex];
     const flushed = flushThinkParser(thinkParser);
     if (assistant?.role === "assistant") {
-      if (flushed.answer) assistant.content += flushed.answer;
-      if (flushed.thinking) assistant.thinking = `${assistant.thinking || ""}${flushed.thinking}`;
+      if (flushed.answer) assistant.content = appendDisplayText(assistant.content, flushed.answer);
+      if (flushed.thinking) assistant.thinking = appendDisplayText(assistant.thinking, flushed.thinking);
     }
-    if (assistant?.role === "assistant" && !assistant.content.trim()) {
+    if (assistant?.role === "assistant" && !cleanDisplayText(assistant.content)) {
       currentLog = "Stream returned timings but no visible text. Fetching final response...";
       render();
       const response = await wllama.createChatCompletion({
@@ -831,12 +849,20 @@ async function sendMessage(): Promise<void> {
       assistant.content = finalParts.answer;
       assistant.thinking = finalParts.thinking || assistant.thinking;
     }
+    if (assistant?.role === "assistant") {
+      assistant.content = cleanDisplayText(assistant.content);
+      assistant.thinking = cleanDisplayText(assistant.thinking || "");
+      assistant.isStreaming = false;
+    }
     const elapsed = (performance.now() - startedAt) / 1000;
     currentLog = formatDoneLog(elapsed, lastTimings);
   } catch (error) {
     const last = chat[chat.length - 1];
     if (last?.role === "assistant" && !last.content) {
       last.content = `Error: ${errorToText(error)}`;
+    }
+    if (last?.role === "assistant") {
+      last.isStreaming = false;
     }
     currentLog = `Generation stopped:\n${errorToText(error)}`;
   } finally {
@@ -859,6 +885,36 @@ function formatDoneLog(elapsed: number, timings?: ResultTimings): string {
 function errorToText(error: unknown): string {
   if (error instanceof Error) return error.stack || error.message;
   return String(error);
+}
+
+function stripSpecialTokens(value: string): string {
+  return value
+    .replaceAll("<think>", "")
+    .replaceAll("</think>", "")
+    .replaceAll("<thinking>", "")
+    .replaceAll("</thinking>", "")
+    .replaceAll("<start_of_turn>", "")
+    .replaceAll("<end_of_turn>", "")
+    .replaceAll("<start_of_image>", "")
+    .replaceAll("<end_of_image>", "")
+    .replaceAll("<bos>", "")
+    .replaceAll("<eos>", "");
+}
+
+function cleanDisplayText(value: string): string {
+  return stripSpecialTokens(value).trim();
+}
+
+function isTemplateNoise(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.length > 0 && trimmed.length <= 4 && /^[.)\]}"'`:,;\s]+$/.test(trimmed);
+}
+
+function appendDisplayText(current: string | undefined, incoming: string): string {
+  const cleaned = stripSpecialTokens(incoming);
+  if (!cleaned) return current || "";
+  if (!current?.trim() && isTemplateNoise(cleaned)) return current || "";
+  return `${current || ""}${cleaned}`;
 }
 
 function textFromValue(value: unknown): string {
@@ -949,9 +1005,13 @@ function extractStreamParts(chunk: unknown, state: ThinkParseState): StreamParts
   const message = (choice.message && typeof choice.message === "object" ? choice.message : {}) as Record<string, unknown>;
   const token = (data.token && typeof data.token === "object" ? data.token : {}) as Record<string, unknown>;
 
-  const explicitThinking =
+  const appendThinking =
     textFromValue(delta.reasoning_content) ||
     textFromValue(delta.thinking) ||
+    textFromValue(data.reasoning_delta) ||
+    textFromValue(data.thinking_delta);
+
+  const replacementThinking =
     textFromValue(message.reasoning_content) ||
     textFromValue(message.thinking) ||
     textFromValue(data.reasoning_content) ||
@@ -972,9 +1032,9 @@ function extractStreamParts(chunk: unknown, state: ThinkParseState): StreamParts
 
   return {
     answer: appendParts.answer || replacementParts.answer,
-    thinking: explicitThinking || appendParts.thinking || replacementParts.thinking,
-    replaceAnswer: Boolean(replacementParts.answer),
-    replaceThinking: Boolean(explicitThinking || replacementParts.thinking),
+    thinking: appendThinking || appendParts.thinking || replacementThinking || replacementParts.thinking,
+    replaceAnswer: Boolean(replacementParts.answer && !appendParts.answer),
+    replaceThinking: Boolean((replacementThinking || replacementParts.thinking) && !appendThinking && !appendParts.thinking),
   };
 }
 
