@@ -15,6 +15,12 @@
   box-sizing: border-box;
 }
 
+html,
+body,
+#app {
+  height: 100%;
+}
+
 body {
   margin: 0;
   min-width: 320px;
@@ -37,8 +43,13 @@ button {
 
 .app {
   width: min(1180px, calc(100vw - 32px));
+  height: 100dvh;
   margin: 0 auto;
   padding: 24px 0 36px;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .topbar {
@@ -159,8 +170,10 @@ h1 {
 
 .shell {
   display: grid;
+  flex: 1;
   grid-template-columns: minmax(0, 1fr) 340px;
   gap: 18px;
+  min-height: 0;
 }
 
 .panel {
@@ -170,7 +183,7 @@ h1 {
 }
 
 .chat-panel {
-  min-height: 690px;
+  min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
@@ -207,6 +220,7 @@ h1 {
 }
 
 .messages {
+  min-height: 0;
   overflow: auto;
   padding: 18px;
 }
@@ -242,6 +256,41 @@ h1 {
 
 .answer-text {
   white-space: pre-wrap;
+}
+
+.attachments {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.answer-text + .attachments {
+  margin-top: 12px;
+}
+
+.image-attachment {
+  display: grid;
+  gap: 6px;
+  max-width: min(320px, 70vw);
+  margin: 0;
+}
+
+.image-attachment img {
+  display: block;
+  max-width: 100%;
+  max-height: 280px;
+  border: 1px solid rgba(244, 240, 232, 0.14);
+  border-radius: 8px;
+  object-fit: contain;
+  background: #11110f;
+}
+
+.image-attachment figcaption {
+  overflow: hidden;
+  color: #c9c1b2;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .thinking-block {
@@ -312,6 +361,40 @@ h1 {
   gap: 10px;
   padding: 14px;
   border-top: 1px solid rgba(244, 240, 232, 0.1);
+}
+
+.pending-attachment {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid rgba(244, 240, 232, 0.12);
+  border-radius: 8px;
+  background: #161612;
+}
+
+.pending-attachment img {
+  width: 44px;
+  height: 44px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: #11110f;
+}
+
+.pending-attachment span {
+  overflow: hidden;
+  color: #c9c1b2;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remove-attachment {
+  min-height: 34px;
+  width: 34px;
+  font-size: 20px;
+  line-height: 1;
 }
 
 textarea,
@@ -385,8 +468,10 @@ select {
 
 .side {
   display: flex;
+  min-height: 0;
   flex-direction: column;
   gap: 14px;
+  overflow: auto;
 }
 
 .card {
@@ -482,11 +567,20 @@ select {
 @media (max-width: 900px) {
   .app {
     width: min(100vw - 20px, 720px);
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
     padding-top: 14px;
   }
 
   .shell {
     grid-template-columns: 1fr;
+    overflow: visible;
+  }
+
+  .chat-panel {
+    height: min(72dvh, 680px);
+    min-height: 480px;
   }
 
   .status-strip {
@@ -497,6 +591,10 @@ select {
     max-width: 94%;
   }
 
+  .image-attachment {
+    max-width: min(280px, 78vw);
+  }
+
   .topbar {
     align-items: flex-start;
     flex-direction: column;
@@ -505,5 +603,22 @@ select {
   .actions {
     align-self: stretch;
     justify-content: flex-end;
+  }
+
+  .composer-row {
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+
+  .file-chip {
+    flex-basis: 100%;
+  }
+
+  .composer-row > .button {
+    flex: 1;
+  }
+
+  .side {
+    overflow: visible;
   }
 }

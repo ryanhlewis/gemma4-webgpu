@@ -16,14 +16,27 @@ const DEFAULT_MMPROJ_URL =
 const GOOGLE_SINGLE_GGUF =
   "https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf/resolve/main/gemma-4-E2B_q4_0-it.gguf";
 const TOTAL_DOWNLOAD_BYTES = 4_340_000_000;
+const MAX_IMAGE_DIMENSION = 1024;
+const IMAGE_JPEG_QUALITY = 0.9;
 
 type Role = "user" | "assistant";
 
 type ChatEntry = {
   role: Role;
   content: string;
+  images?: Array<{
+    name: string;
+    url: string;
+    data?: ArrayBuffer;
+  }>;
   thinking?: string;
   thinkingOpen?: boolean;
+};
+
+type ImageAttachment = {
+  file: File;
+  name: string;
+  url: string;
 };
 
 type StreamParts = {
@@ -60,7 +73,7 @@ let loadPhase: LoadPhase = "idle";
 let generating = false;
 let loadStats: LoadStats = { loaded: 0, total: TOTAL_DOWNLOAD_BYTES, startedAt: 0, phaseStartedAt: 0 };
 let chat: ChatEntry[] = [];
-let imageFile: File | null = null;
+let imageAttachment: ImageAttachment | null = null;
 let abortController: AbortController | null = null;
 let lastTimings: ResultTimings | undefined;
 let settingsOpen = false;
@@ -206,7 +219,9 @@ function appendLog(message: string): void {
 
 function renderMessage(item: ChatEntry, index: number): string {
   if (item.role === "user") {
-    return `<div class="message user">${escapeHtml(item.content)}</div>`;
+    const text = item.content.trim() ? `<div class="answer-text">${escapeHtml(item.content)}</div>` : "";
+    const images = renderImageAttachments(item.images || []);
+    return `<div class="message user">${text}${images}</div>`;
   }
 
   const thinking = item.thinking?.trim() || "";
@@ -229,6 +244,18 @@ function renderMessage(item: ChatEntry, index: number): string {
   const waiting = !answer && !thinkingBlock ? `<div class="answer-text"><span class="subtle">Waiting for response...</span></div>` : "";
 
   return `<div class="message assistant${thinkingBlock && !answer ? " thinking-message" : ""}">${thinkingBlock}${answer}${waiting}</div>`;
+}
+
+function renderImageAttachments(images: ChatEntry["images"]): string {
+  if (!images?.length) return "";
+  return `<div class="attachments">${images
+    .map(
+      (image) => `<figure class="image-attachment">
+        <img src="${escapeAttr(image.url)}" alt="${escapeAttr(image.name)}" />
+        <figcaption>${escapeHtml(image.name)}</figcaption>
+      </figure>`
+    )
+    .join("")}</div>`;
 }
 
 function render(): void {
@@ -291,13 +318,21 @@ function render(): void {
 
           <form class="composer" id="chatForm">
             <textarea id="promptInput" placeholder="Message Gemma">${escapeHtml(state.prompt)}</textarea>
+            ${
+              imageAttachment
+                ? `<div class="pending-attachment">
+                    <img src="${escapeAttr(imageAttachment.url)}" alt="${escapeAttr(imageAttachment.name)}" />
+                    <span>${escapeHtml(imageAttachment.name)}</span>
+                    <button class="icon-button remove-attachment" type="button" id="removeImageButton" aria-label="Remove image" title="Remove image">&times;</button>
+                  </div>`
+                : ""
+            }
             <div class="composer-row">
               <label class="file-chip">
                 <span class="chip-button">Add image</span>
                 <input id="imageInput" type="file" accept="image/*" />
-                <span class="file-name">${imageFile ? escapeHtml(imageFile.name) : "Optional image input"}</span>
+                <span class="file-name">${imageAttachment ? escapeHtml(imageAttachment.name) : "Optional image input"}</span>
               </label>
-              ${imageFile ? `<button class="button" type="button" id="removeImageButton">Remove image</button>` : ""}
               ${
                 generating
                   ? `<button class="button danger" id="stopButton" type="button">Stop</button>`
@@ -425,7 +460,8 @@ function getInputValue(id: string, fallback: string): string {
 }
 
 function getTextAreaValue(id: string, fallback: string): string {
-  return document.querySelector<HTMLTextAreaElement>(`#${id}`)?.value.trim() || fallback;
+  const element = document.querySelector<HTMLTextAreaElement>(`#${id}`);
+  return element ? element.value.trim() : fallback;
 }
 
 function getNumberValue(id: string, fallback: number): number {
@@ -443,22 +479,29 @@ function bindEvents(): void {
     void sendMessage();
   });
 
+  document.querySelector<HTMLTextAreaElement>("#promptInput")?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+    event.preventDefault();
+    void sendMessage();
+  });
+
   document.querySelector<HTMLButtonElement>("#stopButton")?.addEventListener("click", () => {
     abortController?.abort();
   });
 
   document.querySelector<HTMLInputElement>("#imageInput")?.addEventListener("change", (event) => {
     const files = (event.target as HTMLInputElement).files;
-    imageFile = files?.[0] || null;
+    setPendingImage(files?.[0] || null);
     render();
   });
 
   document.querySelector<HTMLButtonElement>("#removeImageButton")?.addEventListener("click", () => {
-    imageFile = null;
+    setPendingImage(null);
     render();
   });
 
   document.querySelector<HTMLButtonElement>("#clearButton")?.addEventListener("click", () => {
+    revokeChatImageUrls();
     chat = [];
     lastTimings = undefined;
     render();
@@ -492,6 +535,57 @@ function bindEvents(): void {
     render();
     appendLog("Switched to the official single GGUF URL. Browsers may reject files over 2 GB; split shards are recommended.");
   });
+}
+
+function setPendingImage(file: File | null): void {
+  if (imageAttachment) {
+    URL.revokeObjectURL(imageAttachment.url);
+  }
+  imageAttachment = file
+    ? {
+        file,
+        name: file.name,
+        url: URL.createObjectURL(file),
+      }
+    : null;
+}
+
+function revokeChatImageUrls(): void {
+  setPendingImage(null);
+  for (const entry of chat) {
+    for (const image of entry.images || []) {
+      URL.revokeObjectURL(image.url);
+    }
+  }
+}
+
+async function imageFileToArrayBuffer(file: File): Promise<ArrayBuffer> {
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(bitmap.width, bitmap.height));
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Could not prepare image canvas.");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, width, height);
+    context.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close();
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (value) => (value ? resolve(value) : reject(new Error("Could not encode image."))),
+        "image/jpeg",
+        IMAGE_JPEG_QUALITY
+      );
+    });
+    return await blob.arrayBuffer();
+  } catch (error) {
+    appendLog(`Image resize skipped: ${errorToText(error)}`);
+    return await file.arrayBuffer();
+  }
 }
 
 async function loadModel(): Promise<void> {
@@ -535,7 +629,9 @@ async function loadModel(): Promise<void> {
         flash_attn: true,
         cache_type_k: "f16",
         cache_type_v: "f16",
-        mmproj_offload: true,
+        cache_idle_slots: true,
+        mmproj_offload: false,
+        warmup: false,
         seed: state.seed >= 0 ? state.seed : Math.floor(Math.random() * 2_147_483_647),
         progressCallback: ({ loaded, total }) => {
           loadStats.loaded = loaded;
@@ -599,31 +695,57 @@ async function clearCache(): Promise<void> {
   render();
 }
 
+function shouldKeepHistoryEntry(entry: ChatEntry): boolean {
+  return entry.content.trim().length > 0 || Boolean(entry.images?.some((image) => image.data));
+}
+
+function chatEntryToCompletionMessage(entry: ChatEntry): ChatCompletionMessage {
+  const images = entry.images?.filter((image) => image.data) || [];
+  if (images.length > 0) {
+    return {
+      role: entry.role,
+      content: [
+        ...images.map((image) => ({ type: "image" as const, data: image.data as ArrayBuffer })),
+        { type: "text" as const, text: entry.content || "Describe the attached image." },
+      ],
+    } as ChatCompletionMessage;
+  }
+
+  return {
+    role: entry.role,
+    content: entry.content,
+  };
+}
+
 async function sendMessage(): Promise<void> {
   if (!wllama || !modelLoaded || generating) return;
   syncInputs();
-  if (!state.prompt) return;
+  if (!state.prompt && !imageAttachment) return;
 
   const userMessage = state.prompt;
-  const imageData = imageFile ? await imageFile.arrayBuffer() : null;
+  const attachedImage = imageAttachment;
+  const imageData = attachedImage ? await imageFileToArrayBuffer(attachedImage.file) : null;
+  const modelText = userMessage || "Describe the attached image.";
   const content = imageData
     ? [
-        { type: "text" as const, text: userMessage },
         { type: "image" as const, data: imageData },
+        { type: "text" as const, text: modelText },
       ]
     : userMessage;
 
   const history: ChatCompletionMessage[] = chat
-    .filter((entry) => entry.content.trim().length > 0)
-    .map((entry) => ({
-      role: entry.role,
-      content: entry.content,
-    }));
+    .filter((entry) => shouldKeepHistoryEntry(entry))
+    .map((entry) => chatEntryToCompletionMessage(entry));
 
-  chat.push({ role: "user", content: imageFile ? `${userMessage}\n[image: ${imageFile.name}]` : userMessage });
+  chat.push({
+    role: "user",
+    content: userMessage,
+    images: attachedImage ? [{ name: attachedImage.name, url: attachedImage.url, data: imageData || undefined }] : undefined,
+  });
   const assistantIndex = chat.length;
   chat.push({ role: "assistant", content: "" });
   state.prompt = "";
+  imageAttachment = null;
   generating = true;
   abortController = new AbortController();
   lastTimings = undefined;
