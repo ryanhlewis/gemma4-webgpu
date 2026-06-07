@@ -1,7 +1,8 @@
 ---
 title: Gemma 4 WebGPU
-sdk: static
-app_file: dist/index.html
+sdk: gradio
+app_file: app.py
+python_version: "3.11"
 models:
   - google/gemma-4-E2B-it-qat-q4_0-gguf
 tags:
@@ -10,17 +11,13 @@ tags:
   - llama.cpp
   - wllama
   - gemma
-custom_headers:
-  cross-origin-embedder-policy: require-corp
-  cross-origin-opener-policy: same-origin
-  cross-origin-resource-policy: cross-origin
 ---
 
 # Gemma 4 WebGPU
 
-Static browser chat app for `google/gemma-4-E2B-it-qat-q4_0-gguf`.
+Browser chat app for `google/gemma-4-E2B-it-qat-q4_0-gguf`.
 
-The Space serves only HTML, CSS, JavaScript, and Wllama WASM assets. The GGUF files are downloaded by the browser and inference runs locally through Wllama / llama.cpp WebGPU.
+The Space serves only HTML, CSS, JavaScript, and Wllama WASM assets from the checked-in `dist/` build. The GGUF files are downloaded by the browser and inference runs locally through Wllama / llama.cpp WebGPU. The Python entrypoint is only a static file server with cross-origin isolation headers.
 
 ## Model Assets
 
@@ -46,7 +43,7 @@ Open:
 http://127.0.0.1:8030/
 ```
 
-Cross-origin isolation headers are enabled in Vite because Wllama uses browser features such as WebGPU, WebAssembly, OPFS, and SharedArrayBuffer when available.
+Cross-origin isolation headers are enabled in Vite and in `app.py` because Wllama uses browser features such as WebGPU, WebAssembly, OPFS, and SharedArrayBuffer when available.
 
 ## URL Overrides
 
@@ -73,5 +70,5 @@ It downloads the official Google GGUF, uses the llama.cpp Docker image to run `l
 ## References
 
 - Wllama supports direct browser inference, WebGPU, multimodal inputs, and split GGUF loading.
-- Hugging Face Static Spaces support custom COOP/COEP/CORP headers through README metadata.
+- The Hugging Face Space uses the free Gradio runtime as a static file server so it does not require Static Space build credits.
 - `google/gemma-4-E2B-it-qat-q4_0-gguf` is Apache-2.0 licensed.
