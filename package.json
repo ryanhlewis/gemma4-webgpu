@@ -1,0 +1,27 @@
+{
+  "name": "gemma4-webgpu",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 8030",
+    "build": "tsc && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 8030",
+    "check": "tsc --noEmit && vite build"
+  },
+  "keywords": [
+    "gemma",
+    "gguf",
+    "webgpu",
+    "wllama",
+    "llama.cpp"
+  ],
+  "author": "ryanhlewis",
+  "license": "Apache-2.0",
+  "description": "Static browser WebGPU chat app for Gemma 4 E2B GGUF using Wllama.",
+  "dependencies": {
+    "@wllama/wllama": "^3.4.1",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16"
+  }
+}

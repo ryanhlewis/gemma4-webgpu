@@ -1,0 +1,399 @@
+:root {
+  color-scheme: dark;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  background: #10100f;
+  color: #f4f0e8;
+  line-height: 1.4;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    linear-gradient(180deg, rgba(57, 69, 58, 0.22), transparent 360px),
+    #10100f;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  border: 0;
+}
+
+.app {
+  width: min(1180px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 24px 0 36px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mark {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid rgba(244, 240, 232, 0.16);
+  border-radius: 8px;
+  background: #d7ff7a;
+  color: #15170f;
+  font-weight: 800;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 19px;
+  font-weight: 720;
+  letter-spacing: 0;
+}
+
+.subtle {
+  color: #a7a093;
+  font-size: 13px;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.icon-button,
+.button {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 8px;
+  padding: 0 14px;
+  border: 1px solid rgba(244, 240, 232, 0.12);
+  background: #24231f;
+  color: #f4f0e8;
+  cursor: pointer;
+}
+
+.icon-button {
+  width: 38px;
+  padding: 0;
+}
+
+.button.primary {
+  background: #d7ff7a;
+  border-color: #d7ff7a;
+  color: #15170f;
+  font-weight: 740;
+}
+
+.button.danger {
+  background: #3a2525;
+  border-color: #6e3737;
+  color: #ffd9d9;
+}
+
+.button:disabled,
+.icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 18px;
+}
+
+.panel {
+  border: 1px solid rgba(244, 240, 232, 0.12);
+  border-radius: 8px;
+  background: rgba(26, 25, 22, 0.94);
+}
+
+.chat-panel {
+  min-height: 690px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.status-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  border-bottom: 1px solid rgba(244, 240, 232, 0.1);
+  background: rgba(244, 240, 232, 0.08);
+}
+
+.metric {
+  min-width: 0;
+  padding: 12px 14px;
+  background: #1a1916;
+}
+
+.metric span {
+  display: block;
+  color: #a7a093;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.metric strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 2px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 680;
+}
+
+.messages {
+  overflow: auto;
+  padding: 18px;
+}
+
+.message-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.message {
+  max-width: 86%;
+  padding: 13px 14px;
+  border: 1px solid rgba(244, 240, 232, 0.1);
+  border-radius: 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message.user {
+  align-self: flex-end;
+  background: #243124;
+}
+
+.message.assistant {
+  align-self: flex-start;
+  background: #22211d;
+}
+
+.empty {
+  display: grid;
+  min-height: 340px;
+  place-items: center;
+  color: #a7a093;
+  text-align: center;
+}
+
+.composer {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-top: 1px solid rgba(244, 240, 232, 0.1);
+}
+
+textarea,
+input,
+select {
+  width: 100%;
+  border: 1px solid rgba(244, 240, 232, 0.12);
+  border-radius: 8px;
+  background: #121210;
+  color: #f4f0e8;
+  outline: none;
+}
+
+textarea:focus,
+input:focus,
+select:focus {
+  border-color: rgba(215, 255, 122, 0.8);
+  box-shadow: 0 0 0 3px rgba(215, 255, 122, 0.12);
+}
+
+textarea {
+  min-height: 96px;
+  resize: vertical;
+  padding: 12px;
+}
+
+input,
+select {
+  min-height: 38px;
+  padding: 0 10px;
+}
+
+.composer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.file-chip {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  color: #a7a093;
+  font-size: 13px;
+}
+
+.file-chip input {
+  display: none;
+}
+
+.chip-button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 7px;
+  border-radius: 8px;
+  padding: 0 10px;
+  background: #24231f;
+  color: #f4f0e8;
+  cursor: pointer;
+}
+
+.file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.card {
+  padding: 16px;
+}
+
+.card h2 {
+  margin-bottom: 10px;
+  font-size: 15px;
+  font-weight: 720;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.field label {
+  color: #c9c1b2;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.progress {
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #11110f;
+}
+
+.bar {
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: #d7ff7a;
+  transition: width 180ms ease;
+}
+
+.log {
+  min-height: 106px;
+  max-height: 190px;
+  overflow: auto;
+  padding: 10px;
+  border-radius: 8px;
+  background: #11110f;
+  color: #c9c1b2;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.pill {
+  border: 1px solid rgba(244, 240, 232, 0.12);
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: #c9c1b2;
+  font-size: 12px;
+}
+
+.source {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+  .app {
+    width: min(100vw - 20px, 720px);
+    padding-top: 14px;
+  }
+
+  .shell {
+    grid-template-columns: 1fr;
+  }
+
+  .status-strip {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .message {
+    max-width: 94%;
+  }
+
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
